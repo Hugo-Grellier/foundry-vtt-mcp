@@ -21,6 +21,7 @@ import { CharacterTools } from './tools/character.js';
 import { CompendiumTools } from './tools/compendium.js';
 
 import { SceneTools } from './tools/scene.js';
+import { SceneEditingTools } from './tools/scene-editing.js';
 import { PlaylistTools } from './tools/playlist.js';
 
 import { ActorCreationTools } from './tools/actor-creation.js';
@@ -1193,6 +1194,7 @@ async function startBackend(): Promise<void> {
   const compendiumTools = new CompendiumTools({ foundryClient, logger, systemRegistry });
 
   const sceneTools = new SceneTools({ foundryClient, logger });
+  const sceneEditingTools = new SceneEditingTools({ foundryClient, logger });
   const playlistTools = new PlaylistTools({ foundryClient, logger });
 
   const actorCreationTools = new ActorCreationTools({ foundryClient, logger });
@@ -1423,6 +1425,7 @@ async function startBackend(): Promise<void> {
     ...compendiumTools.getToolDefinitions(),
 
     ...sceneTools.getToolDefinitions(),
+    ...sceneEditingTools.getToolDefinitions(),
 
     ...actorCreationTools.getToolDefinitions(),
     ...actorManagementTools.getToolDefinitions(),
@@ -1785,15 +1788,33 @@ async function startBackend(): Promise<void> {
 
                   break;
 
+                case 'create-scene':
+                  result = await sceneEditingTools.handleCreateScene(args);
+
+                  break;
+
+                case 'scene-documents':
+                  result = await sceneEditingTools.handleSceneDocuments(args);
+
+                  break;
+
+                case 'capture-scene':
+                  result = await sceneEditingTools.handleCaptureScene(args);
+
+                  break;
+
                 default:
                   throw new Error(`Unknown tool: ${name}`);
               }
 
+              const { __image: image, ...rest } = result ?? {};
               const payload = {
                 content: [
+                  ...(image ? [{ type: 'image', data: image.data, mimeType: image.mimeType }] : []),
                   {
                     type: 'text',
-                    text: typeof result === 'string' ? result : JSON.stringify(result),
+                    text:
+                      typeof result === 'string' ? result : JSON.stringify(image ? rest : result),
                   },
                 ],
               };

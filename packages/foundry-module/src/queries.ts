@@ -1,6 +1,7 @@
 import { MODULE_ID } from './constants.js';
 import { FoundryDataAccess } from './data-access.js';
 import { ComfyUIManager } from './comfyui-manager.js';
+import { captureScene, createScene, editSceneDocuments } from './scene-editing.js';
 
 export class QueryHandlers {
   public dataAccess: FoundryDataAccess;
@@ -20,6 +21,15 @@ export class QueryHandlers {
       return { allowed: false };
     }
     return { allowed: true };
+  }
+
+  /** Wrap a handler with the silent GM check used by every write query. */
+  private gmOnly<T>(handler: (data: T) => Promise<any>): (data: T) => Promise<any> {
+    return async (data: T) => {
+      if (!this.validateGMAccess().allowed) return { error: 'Access denied', success: false };
+      this.dataAccess.validateFoundryState();
+      return handler(data);
+    };
   }
 
   /**
@@ -45,6 +55,11 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.list-scenes`] = this.handleListScenes.bind(this);
     CONFIG.queries[`${modulePrefix}.switch-scene`] = this.handleSwitchScene.bind(this);
     CONFIG.queries[`${modulePrefix}.update-scene-music`] = this.handleUpdateSceneMusic.bind(this);
+
+    // Scene building
+    CONFIG.queries[`${modulePrefix}.create-scene`] = this.gmOnly(createScene);
+    CONFIG.queries[`${modulePrefix}.scene-documents`] = this.gmOnly(editSceneDocuments);
+    CONFIG.queries[`${modulePrefix}.capture-scene`] = this.gmOnly(captureScene);
     CONFIG.queries[`${modulePrefix}.manage-playlists`] = this.handleManagePlaylists.bind(this);
     CONFIG.queries[`${modulePrefix}.control-playlist`] = this.handleControlPlaylist.bind(this);
 
