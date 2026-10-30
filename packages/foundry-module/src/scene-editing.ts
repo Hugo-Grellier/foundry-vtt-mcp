@@ -76,6 +76,7 @@ async function sourceData(uuid: string, documentName: 'Scene' | 'Actor'): Promis
 }
 
 export async function createScene(options: {
+  id?: string;
   name?: string;
   image?: string;
   sourceUuid?: string;
@@ -115,7 +116,11 @@ export async function createScene(options: {
   if (typeof options.darkness === 'number') {
     data.environment = { ...(data.environment ?? {}), darknessLevel: options.darkness };
   }
-  const keepId = !!options.sourceUuid && !(game.scenes as any).get(data._id);
+  if (options.id) {
+    if ((game.scenes as any).get(options.id)) throw new Error(`Scene ${options.id} already exists`);
+    data._id = options.id;
+  }
+  const keepId = !!options.id || (!!options.sourceUuid && !(game.scenes as any).get(data._id));
   const [scene] = await (Scene as any).createDocuments([data], { keepId });
   if (options.view) await scene.view();
   return summarize(scene);

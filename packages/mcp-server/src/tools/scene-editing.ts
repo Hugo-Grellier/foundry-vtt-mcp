@@ -124,6 +124,10 @@ export class SceneEditingTools {
   async handleCreateScene(args: any): Promise<any> {
     const parsed = z
       .object({
+        id: z
+          .string()
+          .regex(/^[A-Za-z0-9]{16}$/)
+          .optional(),
         name: z.string().optional(),
         image: z.string().optional(),
         sourceUuid: z.string().optional(),
