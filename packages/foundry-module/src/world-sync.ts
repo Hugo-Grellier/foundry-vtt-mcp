@@ -206,8 +206,50 @@ export async function applySync(options: {
   };
 }
 
+/** Read a world setting (`scope.key`). */
+function getSetting(key: string): any {
+  const [scope, ...rest] = key.split('.');
+  return (game as any).settings.get(scope, rest.join('.'));
+}
+
+/**
+ * Merge entries into an object-valued world setting and remove others: for modules that keep a
+ * collection in one setting (a clocks module), so the tool's entries change and the GM's stay.
+ */
+async function mergeSetting(options: {
+  key: string;
+  set?: Record<string, any>;
+  remove?: string[];
+}): Promise<any> {
+  requireWorldWrites();
+  const [scope, ...rest] = options.key.split('.');
+  const name = rest.join('.');
+  const config = (game as any).settings.settings.get(`${scope}.${name}`);
+  if (!config) throw new Error(`Unknown setting: ${options.key}`);
+  if (config.scope !== 'world') throw new Error(`Not a world setting: ${options.key}`);
+  const value = foundry.utils.deepClone(getSetting(options.key) ?? {});
+  for (const id of options.remove ?? []) delete value[id];
+  Object.assign(value, options.set ?? {});
+  await (game as any).settings.set(scope, name, value);
+  return { keys: Object.keys(value).length };
+}
+
+/** World time in seconds; set it when `worldTime` is given. */
+async function worldTime(options: { worldTime?: number }): Promise<any> {
+  if (typeof options.worldTime === 'number') {
+    requireWorldWrites();
+    const time: any = (game as any).time;
+    if (typeof time.set === 'function') await time.set(options.worldTime);
+    else await time.advance(options.worldTime - time.worldTime);
+  }
+  return { worldTime: (game as any).time.worldTime };
+}
+
 export async function syncWorld(options: any): Promise<any> {
   if (options.op === 'inventory') return inventory(options);
   if (options.op === 'apply') return applySync(options);
+  if (options.op === 'setting') return { value: getSetting(options.key) ?? null };
+  if (options.op === 'merge-setting') return mergeSetting(options);
+  if (options.op === 'time') return worldTime(options);
   throw new Error(`Unknown op: ${options.op}`);
 }

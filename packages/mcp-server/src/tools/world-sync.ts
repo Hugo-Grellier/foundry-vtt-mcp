@@ -38,11 +38,18 @@ export class WorldSyncTools {
       {
         name: 'sync-world',
         description:
-          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. Normally driven by `ttrpg foundry apply`, not by hand.',
+          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. op "setting" reads a world setting (key scope.name); "merge-setting" sets and removes entries of an object-valued world setting; "time" reads or sets the world time in seconds. Normally driven by `ttrpg foundry apply`, not by hand.',
         inputSchema: {
           type: 'object',
           properties: {
-            op: { type: 'string', enum: ['inventory', 'apply'] },
+            op: {
+              type: 'string',
+              enum: ['inventory', 'apply', 'setting', 'merge-setting', 'time'],
+            },
+            key: { type: 'string' },
+            set: { type: 'object' },
+            remove: { type: 'array', items: { type: 'string' } },
+            worldTime: { type: 'number' },
             types: { type: 'array', items: { type: 'string', enum: [...TYPES] } },
             text: { type: 'boolean' },
             create: { type: 'array', items: { type: 'object' } },
@@ -59,7 +66,11 @@ export class WorldSyncTools {
   async handleSyncWorld(args: any): Promise<any> {
     const parsed = z
       .object({
-        op: z.enum(['inventory', 'apply']),
+        op: z.enum(['inventory', 'apply', 'setting', 'merge-setting', 'time']),
+        key: z.string().optional(),
+        set: z.record(z.any()).optional(),
+        remove: z.array(z.string()).optional(),
+        worldTime: z.number().optional(),
         types: z.array(z.enum(TYPES)).optional(),
         text: z.boolean().optional(),
         create: z.array(doc).optional(),
