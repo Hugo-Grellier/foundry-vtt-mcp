@@ -12,19 +12,26 @@ export const SYNC_TYPES = [
   'JournalEntryPage',
   'Actor',
   'Item',
+  'ActiveEffect',
   'Note',
 ] as const;
 type SyncType = (typeof SYNC_TYPES)[number];
 
-/** A document reference: top-level, or embedded in `parent` (`JournalEntry.<id>`, `Scene.<id>`). */
+/** A document reference: top-level, or embedded in `parent` (`JournalEntry.<id>`, `Actor.<id>`, `Scene.<id>`). */
 interface Ref {
   documentName: SyncType;
   parent?: string;
   _id: string;
 }
 
+/**
+ * `source`: a document uuid the new document is copied from (a compendium creature or item);
+ * `data` then overrides its fields. `adjust`: a pf2e NPC adjustment ("elite" or "weak").
+ */
 interface SyncDocument extends Ref {
   data: Record<string, any>;
+  source?: string;
+  adjust?: string;
 }
 
 function requireWorldWrites(): void {
@@ -37,6 +44,17 @@ function parentOf(parent: string): any {
   const doc = (game as any).collections.get(name)?.get(id);
   if (!doc) throw new Error(`Parent not found: ${parent}`);
   return doc;
+}
+
+function parentOrNull(parent: string): any {
+  const [name, id] = parent.split('.');
+  return (game as any).collections.get(name)?.get(id) ?? null;
+}
+
+function lookup(ref: Ref): any {
+  return ref.parent
+    ? parentOf(ref.parent).getEmbeddedCollection(ref.documentName).get(ref._id)
+    : (game as any).collections.get(ref.documentName)?.get(ref._id);
 }
 
 function managed(doc: any): boolean {
@@ -55,87 +73,136 @@ export async function inventory(options: { types?: SyncType[]; text?: boolean })
   const types = new Set(options.types ?? SYNC_TYPES);
   const text = !!options.text;
   const found: any[] = [];
+  const embedded = (parentName: string, collection: any, child: SyncType, field: string) => {
+    if (!types.has(child)) return;
+    for (const parent of collection) {
+      for (const doc of parent[field]) {
+        if (managed(doc)) found.push(describe(doc, `${parentName}.${parent.id}`, text));
+      }
+    }
+  };
   for (const name of ['Folder', 'JournalEntry', 'Actor', 'Item'] as const) {
     if (!types.has(name)) continue;
     for (const doc of (game as any).collections.get(name)) {
       if (managed(doc)) found.push(describe(doc, undefined, text));
     }
   }
-  if (types.has('JournalEntryPage')) {
-    for (const entry of (game as any).journal) {
-      for (const page of entry.pages) {
-        if (managed(page)) found.push(describe(page, `JournalEntry.${entry.id}`, text));
-      }
-    }
-  }
-  if (types.has('Note')) {
-    for (const scene of (game as any).scenes) {
-      for (const note of scene.notes) {
-        if (managed(note)) found.push(describe(note, `Scene.${scene.id}`, text));
-      }
-    }
-  }
+  embedded('JournalEntry', (game as any).journal, 'JournalEntryPage', 'pages');
+  embedded('Actor', (game as any).actors, 'ActiveEffect', 'effects');
+  embedded('Scene', (game as any).scenes, 'Note', 'notes');
   return { documents: found };
 }
 
-function groups<T extends Ref>(items: T[]): Map<string, T[]> {
+/** Ownership keys may be user names prefixed with "@" (the notes know players by name). */
+function resolveOwners(data: Record<string, any>): Record<string, any> {
+  if (!data.ownership) return data;
+  const ownership: Record<string, number> = {};
+  for (const [key, level] of Object.entries(data.ownership as Record<string, number>)) {
+    if (!key.startsWith('@')) {
+      ownership[key] = level;
+      continue;
+    }
+    const user = (game as any).users.getName(key.slice(1));
+    if (user) ownership[user.id] = level;
+  }
+  return { ...data, ownership };
+}
+
+async function prepare(item: SyncDocument): Promise<any> {
+  let data: any = resolveOwners({ ...item.data, _id: item._id });
+  if (item.source) {
+    const source: any = await fromUuid(item.source);
+    if (!source) throw new Error(`Source not found: ${item.source}`);
+    const base = source.toObject();
+    delete base._id;
+    data = foundry.utils.mergeObject(base, data, { inplace: false });
+  }
+  return data;
+}
+
+function groups<T extends Ref>(items: T[]): T[][] {
   const out = new Map<string, T[]>();
   for (const item of items) {
     const key = `${item.documentName}|${item.parent ?? ''}`;
     out.set(key, [...(out.get(key) ?? []), item]);
   }
-  return out;
+  return [...out.values()];
 }
 
 async function run(
   items: Ref[],
   action: 'create' | 'update' | 'delete',
-  payload: (item: any) => any
-): Promise<number> {
-  let count = 0;
-  for (const batch of groups(items).values()) {
+  payload: (item: any) => Promise<any>
+): Promise<any[]> {
+  const results: any[] = [];
+  for (const batch of groups(items)) {
     const { documentName, parent } = batch[0];
-    const values = batch.map(payload);
+    const values = await Promise.all(batch.map(payload));
     const cls: any = (CONFIG as any)[documentName].documentClass;
-    if (parent) {
-      const owner = parentOf(parent);
-      if (action === 'create')
-        await owner.createEmbeddedDocuments(documentName, values, { keepId: true });
-      if (action === 'update') await owner.updateEmbeddedDocuments(documentName, values);
-      if (action === 'delete') await owner.deleteEmbeddedDocuments(documentName, values);
-    } else {
-      if (action === 'create') await cls.createDocuments(values, { keepId: true });
-      if (action === 'update') await cls.updateDocuments(values);
-      if (action === 'delete') await cls.deleteDocuments(values);
-    }
-    count += values.length;
+    const owner = parent ? parentOf(parent) : null;
+    let docs: any[] = [];
+    if (action === 'create')
+      docs = owner
+        ? await owner.createEmbeddedDocuments(documentName, values, { keepId: true })
+        : await cls.createDocuments(values, { keepId: true });
+    if (action === 'update')
+      docs = owner
+        ? await owner.updateEmbeddedDocuments(documentName, values)
+        : await cls.updateDocuments(values);
+    if (action === 'delete')
+      docs = owner
+        ? await owner.deleteEmbeddedDocuments(documentName, values)
+        : await cls.deleteDocuments(values);
+    results.push(...docs);
   }
-  return count;
+  return results;
 }
 
-/** Apply a batch. Updates and deletes only reach managed documents. */
+/**
+ * Apply a batch. `create` keeps the given ids; `update` and `delete` only reach managed
+ * documents; `adopt` updates documents the tool did not create (an adventure's actor), which
+ * become managed through the flags it writes. Missing adopted documents are reported, not created.
+ */
 export async function applySync(options: {
   create?: SyncDocument[];
   update?: SyncDocument[];
+  adopt?: SyncDocument[];
   delete?: Ref[];
 }): Promise<any> {
   requireWorldWrites();
-  const lookup = (ref: Ref): any =>
-    ref.parent
-      ? parentOf(ref.parent).getEmbeddedCollection(ref.documentName).get(ref._id)
-      : (game as any).collections.get(ref.documentName)?.get(ref._id);
   for (const ref of [...(options.update ?? []), ...(options.delete ?? [])]) {
     if (!managed(lookup(ref)))
       throw new Error(`Not a managed document: ${ref.documentName} ${ref._id}`);
   }
-  for (const ref of options.create ?? []) {
+  for (const ref of (options.create ?? []).filter(ref => !ref.parent || parentOrNull(ref.parent))) {
     if (lookup(ref)) throw new Error(`Already exists: ${ref.documentName} ${ref._id}`);
   }
-  const data = (item: SyncDocument) => ({ ...item.data, _id: item._id });
+  // An adventure actor the notes name may not be in this world: report it, skip what hangs on it.
+  const present = (ref: Ref) => !ref.parent || !!parentOrNull(ref.parent);
+  const adopt = (options.adopt ?? []).filter(ref => lookup(ref));
+  const create = (options.create ?? []).filter(present);
+  const missing = [
+    ...(options.adopt ?? []).filter(ref => !lookup(ref)),
+    ...(options.create ?? []).filter(ref => !present(ref)),
+  ].map(ref =>
+    ref.parent ? `${ref.parent}.${ref.documentName}.${ref._id}` : `${ref.documentName}.${ref._id}`
+  );
+  const created = await run(create, 'create', prepare);
+  for (const item of create) {
+    if (item.adjust && item.documentName === 'Actor') {
+      const actor: any = (game as any).actors.get(item._id);
+      if (typeof actor?.applyAdjustment === 'function') await actor.applyAdjustment(item.adjust);
+    }
+  }
+  const updated = await run([...(options.update ?? []), ...adopt], 'update', async item =>
+    resolveOwners({ ...item.data, _id: item._id })
+  );
+  const deleted = await run(options.delete ?? [], 'delete', async (ref: Ref) => ref._id);
   return {
-    created: await run(options.create ?? [], 'create', data),
-    updated: await run(options.update ?? [], 'update', data),
-    deleted: await run(options.delete ?? [], 'delete', (ref: Ref) => ref._id),
+    created: created.length,
+    updated: updated.length,
+    deleted: deleted.length,
+    missing,
   };
 }
 

@@ -2,14 +2,26 @@ import { z } from 'zod';
 import { FoundryClient } from '../foundry-client.js';
 import { Logger } from '../logger.js';
 
-const TYPES = ['Folder', 'JournalEntry', 'JournalEntryPage', 'Actor', 'Item', 'Note'] as const;
+const TYPES = [
+  'Folder',
+  'JournalEntry',
+  'JournalEntryPage',
+  'Actor',
+  'Item',
+  'ActiveEffect',
+  'Note',
+] as const;
 
 const ref = z.object({
   documentName: z.enum(TYPES),
   parent: z.string().optional(),
   _id: z.string().regex(/^[A-Za-z0-9]{16}$/),
 });
-const doc = ref.extend({ data: z.record(z.any()) });
+const doc = ref.extend({
+  data: z.record(z.any()),
+  source: z.string().optional(),
+  adjust: z.enum(['elite', 'weak']).optional(),
+});
 
 /** Generic sync of documents an external tool owns (flags.ttrpg): list them, apply a batch. */
 export class WorldSyncTools {
@@ -26,7 +38,7 @@ export class WorldSyncTools {
       {
         name: 'sync-world',
         description:
-          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id), updates and deletes batches; updates and deletes only reach managed documents. Normally driven by `ttrpg foundry apply`, not by hand.',
+          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. Normally driven by `ttrpg foundry apply`, not by hand.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -35,6 +47,7 @@ export class WorldSyncTools {
             text: { type: 'boolean' },
             create: { type: 'array', items: { type: 'object' } },
             update: { type: 'array', items: { type: 'object' } },
+            adopt: { type: 'array', items: { type: 'object' } },
             delete: { type: 'array', items: { type: 'object' } },
           },
           required: ['op'],
@@ -51,6 +64,7 @@ export class WorldSyncTools {
         text: z.boolean().optional(),
         create: z.array(doc).optional(),
         update: z.array(doc).optional(),
+        adopt: z.array(doc).optional(),
         delete: z.array(ref).optional(),
       })
       .parse(args);
