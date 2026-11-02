@@ -38,14 +38,30 @@ export class WorldSyncTools {
       {
         name: 'sync-world',
         description:
-          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. op "setting" reads a world setting (key scope.name); "merge-setting" sets and removes entries of an object-valued world setting; "time" reads or sets the world time in seconds; "calendar" converts a date with Simple Calendar when active; "flag" / "merge-flag" read and merge an object flag of a world document (uuid Scene.<id>). Normally driven by `ttrpg foundry apply`, not by hand.',
+          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. op "setting" reads a world setting (key scope.name); "merge-setting" sets and removes entries of an object-valued world setting; "time" reads or sets the world time in seconds; "calendar" converts a date with Simple Calendar when active; "flag" / "merge-flag" read and merge an object flag of a world document (uuid Scene.<id>); "scene-notes" lists the map pins of a scene and what they open. Normally driven by `ttrpg foundry apply`, not by hand.',
         inputSchema: {
           type: 'object',
           properties: {
             op: {
               type: 'string',
-              enum: ['inventory', 'apply', 'setting', 'merge-setting', 'time'],
+              enum: [
+                'inventory',
+                'apply',
+                'setting',
+                'merge-setting',
+                'time',
+                'calendar',
+                'flag',
+                'merge-flag',
+                'scene-notes',
+              ],
             },
+            date: {
+              type: 'object',
+              description: 'calendar: {year, month, day}, month and day 0-based',
+            },
+            uuid: { type: 'string', description: 'flag, merge-flag, scene-notes: Scene.<id>' },
+            scope: { type: 'string', description: 'flag, merge-flag: flag scope (module id)' },
             key: { type: 'string' },
             set: { type: 'object' },
             remove: { type: 'array', items: { type: 'string' } },
@@ -75,6 +91,7 @@ export class WorldSyncTools {
           'calendar',
           'flag',
           'merge-flag',
+          'scene-notes',
         ]),
         date: z.object({ year: z.number(), month: z.number(), day: z.number() }).optional(),
         uuid: z.string().optional(),

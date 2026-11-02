@@ -284,7 +284,24 @@ async function mergeFlag(options: {
   return { changed: Object.keys(updates).length };
 }
 
+/** Every map pin (Note) of a scene, managed or not: what it opens, for the tool to retarget. */
+function sceneNotes(options: { uuid: string }): any {
+  const scene = parentOrNull(options.uuid);
+  if (!scene) return { exists: false, notes: [] };
+  return {
+    exists: true,
+    notes: scene.notes.map((note: any) => ({
+      _id: note.id,
+      entryId: note.entryId ?? null,
+      pageId: note.pageId ?? null,
+      text: note.text ?? '',
+      flags: note.flags?.ttrpg ?? null,
+    })),
+  };
+}
+
 export async function syncWorld(options: any): Promise<any> {
+  if (options.op === 'scene-notes') return sceneNotes(options);
   if (options.op === 'calendar') return calendar(options);
   if (options.op === 'flag') {
     const doc = parentOrNull(options.uuid);
