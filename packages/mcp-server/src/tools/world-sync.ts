@@ -38,7 +38,7 @@ export class WorldSyncTools {
       {
         name: 'sync-world',
         description:
-          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. op "setting" reads a world setting (key scope.name); "merge-setting" sets and removes entries of an object-valued world setting; "time" reads or sets the world time in seconds. Normally driven by `ttrpg foundry apply`, not by hand.',
+          'Low-level sync of world documents owned by the TTRPG campaign tools (they carry flags.ttrpg). op "inventory" lists them (types filter; text: true adds page markdown). op "apply" creates (keeping the given _id, optionally copied from a source uuid), updates, adopts (updates a document the tool did not create, e.g. an adventure actor) and deletes batches; updates and deletes only reach managed documents. op "setting" reads a world setting (key scope.name); "merge-setting" sets and removes entries of an object-valued world setting; "time" reads or sets the world time in seconds; "calendar" converts a date with Simple Calendar when active; "flag" / "merge-flag" read and merge an object flag of a world document (uuid Scene.<id>). Normally driven by `ttrpg foundry apply`, not by hand.',
         inputSchema: {
           type: 'object',
           properties: {
