@@ -245,7 +245,52 @@ async function worldTime(options: { worldTime?: number }): Promise<any> {
   return { worldTime: (game as any).time.worldTime };
 }
 
+/**
+ * Simple Calendar's view of the world time, when that module is active: the current date and,
+ * for a given date (month and day 0-based, its convention), the world time that shows it at the
+ * current time of day.
+ */
+function calendar(options: { date?: { year: number; month: number; day: number } }): any {
+  const api = (window as any).SimpleCalendar?.api;
+  if (!api || !(game as any).modules.get('foundryvtt-simple-calendar-reborn')?.active) {
+    return { active: false };
+  }
+  const now = api.timestampToDate((game as any).time.worldTime);
+  const time = { hour: now.hour, minute: now.minute, seconds: now.seconds };
+  const out: any = {
+    active: true,
+    current: { year: now.year, month: now.month, day: now.day, ...time },
+  };
+  if (options.date) out.timestamp = api.dateToTimestamp({ ...options.date, ...time });
+  return out;
+}
+
+/** Merge entries into an object flag of a world document (`Scene.<id>`), like mergeSetting. */
+async function mergeFlag(options: {
+  uuid: string;
+  scope: string;
+  key: string;
+  set?: Record<string, any>;
+  remove?: string[];
+}): Promise<any> {
+  requireWorldWrites();
+  const doc = parentOrNull(options.uuid);
+  if (!doc) throw new Error(`Not found: ${options.uuid}`);
+  const base = `flags.${options.scope}.${options.key}`;
+  const updates: Record<string, any> = {};
+  for (const id of options.remove ?? []) updates[`${base}.-=${id}`] = null;
+  for (const [id, value] of Object.entries(options.set ?? {})) updates[`${base}.${id}`] = value;
+  if (Object.keys(updates).length) await doc.update(updates);
+  return { changed: Object.keys(updates).length };
+}
+
 export async function syncWorld(options: any): Promise<any> {
+  if (options.op === 'calendar') return calendar(options);
+  if (options.op === 'flag') {
+    const doc = parentOrNull(options.uuid);
+    return { value: doc?.flags?.[options.scope]?.[options.key] ?? null, exists: !!doc };
+  }
+  if (options.op === 'merge-flag') return mergeFlag(options);
   if (options.op === 'inventory') return inventory(options);
   if (options.op === 'apply') return applySync(options);
   if (options.op === 'setting') return { value: getSetting(options.key) ?? null };

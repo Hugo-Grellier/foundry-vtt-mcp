@@ -66,7 +66,19 @@ export class WorldSyncTools {
   async handleSyncWorld(args: any): Promise<any> {
     const parsed = z
       .object({
-        op: z.enum(['inventory', 'apply', 'setting', 'merge-setting', 'time']),
+        op: z.enum([
+          'inventory',
+          'apply',
+          'setting',
+          'merge-setting',
+          'time',
+          'calendar',
+          'flag',
+          'merge-flag',
+        ]),
+        date: z.object({ year: z.number(), month: z.number(), day: z.number() }).optional(),
+        uuid: z.string().optional(),
+        scope: z.string().optional(),
         key: z.string().optional(),
         set: z.record(z.any()).optional(),
         remove: z.array(z.string()).optional(),
