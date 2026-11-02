@@ -22,6 +22,7 @@ import { CompendiumTools } from './tools/compendium.js';
 
 import { SceneTools } from './tools/scene.js';
 import { SceneEditingTools } from './tools/scene-editing.js';
+import { WorldSyncTools } from './tools/world-sync.js';
 import { PlaylistTools } from './tools/playlist.js';
 
 import { ActorCreationTools } from './tools/actor-creation.js';
@@ -1195,6 +1196,7 @@ async function startBackend(): Promise<void> {
 
   const sceneTools = new SceneTools({ foundryClient, logger });
   const sceneEditingTools = new SceneEditingTools({ foundryClient, logger });
+  const worldSyncTools = new WorldSyncTools({ foundryClient, logger });
   const playlistTools = new PlaylistTools({ foundryClient, logger });
 
   const actorCreationTools = new ActorCreationTools({ foundryClient, logger });
@@ -1426,6 +1428,7 @@ async function startBackend(): Promise<void> {
 
     ...sceneTools.getToolDefinitions(),
     ...sceneEditingTools.getToolDefinitions(),
+    ...worldSyncTools.getToolDefinitions(),
 
     ...actorCreationTools.getToolDefinitions(),
     ...actorManagementTools.getToolDefinitions(),
@@ -1800,6 +1803,11 @@ async function startBackend(): Promise<void> {
 
                 case 'capture-scene':
                   result = await sceneEditingTools.handleCaptureScene(args);
+
+                  break;
+
+                case 'sync-world':
+                  result = await worldSyncTools.handleSyncWorld(args);
 
                   break;
 

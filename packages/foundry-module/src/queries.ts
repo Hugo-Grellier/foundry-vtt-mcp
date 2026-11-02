@@ -2,6 +2,7 @@ import { MODULE_ID } from './constants.js';
 import { FoundryDataAccess } from './data-access.js';
 import { ComfyUIManager } from './comfyui-manager.js';
 import { captureScene, createScene, editSceneDocuments } from './scene-editing.js';
+import { syncWorld } from './world-sync.js';
 
 export class QueryHandlers {
   public dataAccess: FoundryDataAccess;
@@ -60,6 +61,7 @@ export class QueryHandlers {
     CONFIG.queries[`${modulePrefix}.create-scene`] = this.gmOnly(createScene);
     CONFIG.queries[`${modulePrefix}.scene-documents`] = this.gmOnly(editSceneDocuments);
     CONFIG.queries[`${modulePrefix}.capture-scene`] = this.gmOnly(captureScene);
+    CONFIG.queries[`${modulePrefix}.sync-world`] = this.gmOnly(syncWorld);
     CONFIG.queries[`${modulePrefix}.manage-playlists`] = this.handleManagePlaylists.bind(this);
     CONFIG.queries[`${modulePrefix}.control-playlist`] = this.handleControlPlaylist.bind(this);
 
