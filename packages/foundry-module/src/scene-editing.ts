@@ -75,6 +75,16 @@ async function sourceData(uuid: string, documentName: 'Scene' | 'Actor'): Promis
   return doc;
 }
 
+// Tool names -> Foundry CONST.GRID_TYPES keys. Hex columns (flat sides top and bottom) suit hexcrawl maps.
+const GRID_TYPES: Record<string, string> = {
+  gridless: 'GRIDLESS',
+  square: 'SQUARE',
+  'hex-rows-odd': 'HEXODDR',
+  'hex-rows-even': 'HEXEVENR',
+  'hex-columns-odd': 'HEXODDQ',
+  'hex-columns-even': 'HEXEVENQ',
+};
+
 export async function createScene(options: {
   id?: string;
   name?: string;
@@ -82,6 +92,8 @@ export async function createScene(options: {
   sourceUuid?: string;
   gridSize?: number;
   gridDistance?: number;
+  gridType?: string;
+  gridUnits?: string;
   padding?: number;
   darkness?: number;
   view?: boolean;
@@ -106,7 +118,14 @@ export async function createScene(options: {
       width: texture.width,
       height: texture.height,
       padding: options.padding ?? 0.1,
-      grid: { size: options.gridSize ?? 100, distance: options.gridDistance ?? 5 },
+      grid: {
+        size: options.gridSize ?? 100,
+        distance: options.gridDistance ?? 5,
+        ...(options.gridType
+          ? { type: (CONST as any).GRID_TYPES[GRID_TYPES[options.gridType]] }
+          : {}),
+        ...(options.gridUnits ? { units: options.gridUnits } : {}),
+      },
       levels: [{ _id: LEVEL_ID, name, background: { src: options.image } }],
       initialLevel: LEVEL_ID,
     };

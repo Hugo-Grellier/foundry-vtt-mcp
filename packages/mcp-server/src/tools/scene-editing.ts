@@ -62,6 +62,23 @@ export class SceneEditingTools {
               description: 'Pixels per grid square for an image scene (default 100)',
             },
             gridDistance: { type: 'number', description: 'Distance per square (default 5)' },
+            gridType: {
+              type: 'string',
+              enum: [
+                'square',
+                'gridless',
+                'hex-rows-odd',
+                'hex-rows-even',
+                'hex-columns-odd',
+                'hex-columns-even',
+              ],
+              description:
+                'Grid type (default square). For a hex grid, gridSize is the hex height in pixels for columns (width for rows): corner to corner is gridSize x 2/sqrt(3)',
+            },
+            gridUnits: {
+              type: 'string',
+              description: "Distance units, e.g. ft or mi (default the system's)",
+            },
             padding: {
               type: 'number',
               description: 'Padding ratio around the image (default 0.1)',
@@ -133,6 +150,17 @@ export class SceneEditingTools {
         sourceUuid: z.string().optional(),
         gridSize: z.number().positive().optional(),
         gridDistance: z.number().positive().optional(),
+        gridType: z
+          .enum([
+            'square',
+            'gridless',
+            'hex-rows-odd',
+            'hex-rows-even',
+            'hex-columns-odd',
+            'hex-columns-even',
+          ])
+          .optional(),
+        gridUnits: z.string().optional(),
         padding: z.number().min(0).max(0.5).optional(),
         darkness: z.number().min(0).max(1).optional(),
         view: z.boolean().optional(),
