@@ -37,6 +37,10 @@ function findScene(identifier?: string): any {
 
 /** Top-left of the scene's image area: Foundry rounds the padding up to whole grid squares. */
 function imageOrigin(scene: any): { x: number; y: number } {
+  // Foundry aligns the padding on the grid: on hex grids it is not a multiple of grid.size.
+  const dimensions = scene.dimensions;
+  if (dimensions && typeof dimensions.sceneX === 'number')
+    return { x: dimensions.sceneX, y: dimensions.sceneY };
   const { width, height, padding } = scene;
   const size = scene.grid.size;
   return {
