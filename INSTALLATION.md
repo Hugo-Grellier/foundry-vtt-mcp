@@ -48,22 +48,22 @@ npm run build
 
 #### Configure Claude Desktop
 
-Add this to your Claude Desktop configuration (claude_desktop_config.json) file:
+Add a `foundry-mcp` entry to the `mcpServers` section of your Claude Desktop configuration file (`claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
     "foundry-mcp": {
       "command": "node",
-      "args": ["path/to/foundry-vtt-mcp/packages/mcp-server/dist/index.js"],
-      "env": {
-        "FOUNDRY_HOST": "localhost",
-        "FOUNDRY_PORT": "31415"
-      }
+      "args": ["path/to/foundry-vtt-mcp/packages/mcp-server/dist/index.js"]
     }
   }
 }
 ```
+
+If the file already has content, add the `foundry-mcp` entry inside the existing `mcpServers` object (create `mcpServers` if it isn't there) rather than pasting the whole block above. A second top-level `{ }` makes the file invalid JSON, and Claude Desktop will fail to load it with a "non-whitespace character" error.
+
+No environment variables are needed for a standard setup. `FOUNDRY_PORT` sets the port the MCP server listens on for the Foundry module, and defaults to `31415`. It is not Foundry's own port (such as `30000`), and the module always connects on `31415`, so leave it unset.
 
 Starting Claude Desktop will start the MCP Server.
 

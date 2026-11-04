@@ -1,6 +1,21 @@
 import { MODULE_ID, ERROR_MESSAGES, TOKEN_DISPOSITIONS } from './constants.js';
 import { permissionManager } from './permissions.js';
 import { transactionManager } from './transaction-manager.js';
+
+// The same five characters foundry.utils.escapeHTML replaces in v14, kept local because
+// that helper isn't confirmed in v13, this module's minimum.
+const HTML_ESCAPES: Record<string, string> = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#x27;',
+};
+
+/** Escape text so it renders as written when Foundry inserts it as HTML. */
+function escapeHTML(text: string): string {
+  return text.replace(/[&<>"']/g, c => HTML_ESCAPES[c]);
+}
 // Local type definitions to avoid shared package import issues
 interface CharacterInfo {
   id: string;
@@ -639,7 +654,9 @@ class PersistentCreatureIndex {
   private generatePackChecksum(pack: any): string {
     // Simple checksum based on pack metadata and size
     const data = `${pack.metadata.id}-${pack.metadata.label}-${pack.index?.size || 0}`;
-    return btoa(data).slice(0, 16); // Simple hash for demonstration
+    // btoa() throws on non-Latin1 (e.g. Cyrillic pack labels) — encode as UTF-8 first
+    const utf8 = String.fromCharCode(...new TextEncoder().encode(data));
+    return btoa(utf8).slice(0, 16); // Simple hash for demonstration
   }
 
   /**
@@ -1682,6 +1699,20 @@ class PersistentCreatureIndex {
     }
   }
 }
+
+// dnd5e stores short size keys (sm/med/lg/grg); normalize both sides for filtering
+const DND5E_SIZE: Record<string, string> = {
+  tiny: 'tiny',
+  sm: 'small',
+  small: 'small',
+  med: 'medium',
+  medium: 'medium',
+  lg: 'large',
+  large: 'large',
+  huge: 'huge',
+  grg: 'gargantuan',
+  gargantuan: 'gargantuan',
+};
 
 export class FoundryDataAccess {
   private moduleId: string = MODULE_ID;
@@ -3529,7 +3560,10 @@ export class FoundryDataAccess {
 
     // Size filter
     if (criteria.size) {
-      if (creature.size.toLowerCase() !== criteria.size.toLowerCase()) {
+      if (
+        DND5E_SIZE[creature.size.toLowerCase()] !==
+        (DND5E_SIZE[criteria.size.toLowerCase()] ?? criteria.size.toLowerCase())
+      ) {
         return false;
       }
     }
@@ -4106,8 +4140,19 @@ export class FoundryDataAccess {
       key === 'save' &&
       parentPath[parentPath.length - 2] === 'abilities';
 
+    // `key` is structural, not a credential, inside PF2e rule elements (rules[i].key
+    // names the element type, e.g. FlatModifier) and ActiveEffect changes
+    // (changes[i].key is the attribute path being modified). Stripping it there
+    // left both unreadable on every read path.
+    const isStructuralKey =
+      key === 'key' &&
+      ['rules', 'changes'].includes(parentPath[parentPath.length - 2]) &&
+      /^\d+$/.test(parentPath[parentPath.length - 1] ?? '');
+
     return (
-      sensitiveKeys.includes(key) || problematicKeys.includes(key) || isDeprecatedDnd5eAbilitySave
+      (sensitiveKeys.includes(key) && !isStructuralKey) ||
+      problematicKeys.includes(key) ||
+      isDeprecatedDnd5eAbilitySave
     );
   }
 
@@ -4872,6 +4917,203 @@ export class FoundryDataAccess {
     }
   }
 
+  async createActorFromData(request: {
+    actorData: Record<string, unknown>;
+    addToScene?: boolean;
+    updateExisting?: boolean;
+    existingActorIdentifier?: string;
+    preserveItemTypes?: string[];
+    placement?: {
+      type: 'random' | 'grid' | 'center' | 'coordinates';
+      coordinates?: { x: number; y: number }[];
+    };
+  }): Promise<{
+    success: boolean;
+    actor?: { id: string; name: string; type: string };
+    updatedExisting?: boolean;
+    tokensPlaced?: number;
+    errors?: string[];
+  }> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createActor', { quantity: 1 });
+    if (!permissionCheck.allowed) {
+      throw new Error(`${ERROR_MESSAGES.ACCESS_DENIED}: ${permissionCheck.reason}`);
+    }
+    permissionManager.auditPermissionCheck('createActor', permissionCheck, request);
+
+    try {
+      const actorData = foundry.utils.deepClone(request.actorData) as any;
+
+      delete actorData._id;
+      delete actorData.sort;
+
+      if (!actorData.name || typeof actorData.name !== 'string') {
+        throw new Error('actorData.name is required and must be a string');
+      }
+      if (!actorData.type || typeof actorData.type !== 'string') {
+        actorData.type = 'character';
+      }
+      if (!actorData.system || typeof actorData.system !== 'object') {
+        actorData.system = {};
+      }
+
+      if (Array.isArray(actorData.items)) {
+        actorData.items = actorData.items
+          .filter((item: any) => item && typeof item === 'object')
+          .map((item: any) => {
+            const clonedItem = foundry.utils.deepClone(item);
+            delete clonedItem._id;
+            delete clonedItem.folder;
+            delete clonedItem.sort;
+            return clonedItem;
+          });
+      } else {
+        actorData.items = [];
+      }
+
+      if (Array.isArray(actorData.effects)) {
+        actorData.effects = actorData.effects
+          .filter((effect: any) => effect && typeof effect === 'object')
+          .map((effect: any) => {
+            const clonedEffect = foundry.utils.deepClone(effect);
+            delete clonedEffect._id;
+            delete clonedEffect.folder;
+            delete clonedEffect.sort;
+            return clonedEffect;
+          });
+      } else {
+        actorData.effects = [];
+      }
+
+      if (actorData.prototypeToken?.texture?.src?.startsWith('http')) {
+        actorData.prototypeToken.texture.src = null;
+      }
+
+      if (!actorData.folder) {
+        const folderId = await this.getOrCreateFolder('Foundry MCP Imported Actors', 'Actor');
+        if (folderId) {
+          actorData.folder = folderId;
+        }
+      }
+
+      const incomingItems = actorData.items;
+      const incomingEffects = actorData.effects;
+      delete actorData.items;
+      delete actorData.effects;
+
+      const existingActor =
+        request.updateExisting && request.existingActorIdentifier
+          ? this.findActorByIdentifier(request.existingActorIdentifier)
+          : undefined;
+      const updatedExisting = Boolean(existingActor);
+      let resultActor: any;
+
+      if (existingActor) {
+        await existingActor.update(actorData);
+
+        const preservedTypes = new Set(request.preserveItemTypes ?? []);
+        const existingItemsByKey = new Map<string, any[]>();
+        for (const item of Array.from<any>(existingActor.items || [])) {
+          if (preservedTypes.has(item.type)) continue;
+          const key = `${item.type}::${String(item.name).toLowerCase()}`;
+          const items = existingItemsByKey.get(key) ?? [];
+          items.push(item);
+          existingItemsByKey.set(key, items);
+        }
+
+        const itemUpdates: any[] = [];
+        const itemsToCreate: any[] = [];
+        for (const item of Array.isArray(incomingItems) ? incomingItems : []) {
+          if (preservedTypes.has(item.type)) continue;
+          const key = `${item.type}::${String(item.name).toLowerCase()}`;
+          const matchingItem = existingItemsByKey.get(key)?.shift();
+          if (matchingItem) itemUpdates.push({ ...item, _id: matchingItem.id });
+          else itemsToCreate.push(item);
+        }
+
+        if (itemUpdates.length > 0) {
+          await existingActor.updateEmbeddedDocuments('Item', itemUpdates);
+        }
+        if (itemsToCreate.length > 0) {
+          await existingActor.createEmbeddedDocuments('Item', itemsToCreate);
+        }
+
+        const existingEffectsByKey = new Map<string, any[]>();
+        for (const effect of Array.from<any>(existingActor.effects || [])) {
+          const key = `${effect.type}::${String(effect.name).toLowerCase()}`;
+          const effects = existingEffectsByKey.get(key) ?? [];
+          effects.push(effect);
+          existingEffectsByKey.set(key, effects);
+        }
+
+        const effectUpdates: any[] = [];
+        const effectsToCreate: any[] = [];
+        for (const effect of Array.isArray(incomingEffects) ? incomingEffects : []) {
+          const key = `${effect.type}::${String(effect.name).toLowerCase()}`;
+          const matchingEffect = existingEffectsByKey.get(key)?.shift();
+          if (matchingEffect) effectUpdates.push({ ...effect, _id: matchingEffect.id });
+          else effectsToCreate.push(effect);
+        }
+
+        if (effectUpdates.length > 0) {
+          await existingActor.updateEmbeddedDocuments('ActiveEffect', effectUpdates);
+        }
+        if (effectsToCreate.length > 0) {
+          await existingActor.createEmbeddedDocuments('ActiveEffect', effectsToCreate);
+        }
+        resultActor = existingActor;
+      } else {
+        resultActor = await Actor.create(actorData as any);
+        if (!resultActor) {
+          throw new Error(`Failed to create actor "${actorData.name}"`);
+        }
+
+        if (Array.isArray(incomingItems) && incomingItems.length > 0) {
+          await resultActor.createEmbeddedDocuments('Item', incomingItems as any[]);
+        }
+        if (Array.isArray(incomingEffects) && incomingEffects.length > 0) {
+          await resultActor.createEmbeddedDocuments('ActiveEffect', incomingEffects as any[]);
+        }
+      }
+
+      let tokensPlaced = 0;
+      if (request.addToScene) {
+        const scene = (game.scenes as any).active;
+        if (scene) {
+          const placement = request.placement || { type: 'center' };
+          const position = this.calculateTokenPosition(placement.type, scene, 0);
+          const tokenData = {
+            actorId: resultActor.id,
+            x: position.x,
+            y: position.y,
+          };
+          await scene.createEmbeddedDocuments('Token', [tokenData], {});
+          tokensPlaced = 1;
+        }
+      }
+
+      return {
+        success: true,
+        actor: {
+          id: resultActor.id as string,
+          name: resultActor.name as string,
+          type: resultActor.type,
+        },
+        updatedExisting,
+        tokensPlaced,
+      };
+    } catch (error) {
+      this.auditLog(
+        'createActorFromData',
+        request,
+        'failure',
+        error instanceof Error ? error.message : 'Unknown error'
+      );
+      throw error;
+    }
+  }
+
   /**
    * Remove embedded Items from an existing Actor.
    *
@@ -5021,6 +5263,83 @@ export class FoundryDataAccess {
     }
 
     return result;
+  }
+
+  /**
+   * Read a single world-level Item in full.
+   *
+   * `listWorldItems` returns index-level fields only, so there was no way to
+   * read back an item a GM had built in the sidebar: the bridge could create
+   * and update world items but never see their description or system data
+   * (#116). Resolves by id first, then by exact name, and refuses an ambiguous
+   * name rather than guessing which item was meant.
+   *
+   * Reads through `toObject()` rather than the live `system`, so Map-backed
+   * fields (dnd5e Activities) serialize as their stored source instead of
+   * collapsing to `{}`.
+   */
+  async getWorldItem(params: { itemIdentifier: string }): Promise<{
+    id: string;
+    name: string;
+    type: string;
+    img?: string;
+    folderId: string | null;
+    folderName: string | null;
+    system: Record<string, any>;
+    fullData: Record<string, any>;
+  }> {
+    this.validateFoundryState();
+
+    const identifier = (params?.itemIdentifier ?? '').trim();
+    if (!identifier) {
+      throw new Error('itemIdentifier is required');
+    }
+
+    const collection = (game as any).items;
+    let item = collection?.get?.(identifier) ?? null;
+
+    if (!item) {
+      const lowered = identifier.toLowerCase();
+      const all: any[] = collection?.contents ?? Array.from(collection ?? []);
+      const matches = all.filter(
+        (candidate: any) => (candidate?.name ?? '').toLowerCase() === lowered
+      );
+      if (matches.length > 1) {
+        throw new Error(
+          `Multiple world items are named "${identifier}". Pass an id instead: ` +
+            matches.map((candidate: any) => candidate.id).join(', ')
+        );
+      }
+      item = matches[0] ?? null;
+    }
+
+    if (!item) {
+      throw new Error(`World item not found: ${identifier}`);
+    }
+
+    const documentData = (item.toObject?.() ?? {}) as Record<string, any>;
+    const system = this.sanitizeData(documentData.system ?? {});
+    const fullData = this.sanitizeData(documentData);
+
+    // The sanitizer strips `advancement`, so restore it from source, as
+    // getCompendiumDocumentFull does.
+    if (Object.prototype.hasOwnProperty.call(documentData.system ?? {}, 'advancement')) {
+      const advancement = this.sanitizeData(documentData.system.advancement);
+      system.advancement = advancement;
+      fullData.system ??= {};
+      fullData.system.advancement = advancement;
+    }
+
+    return {
+      id: item.id ?? '',
+      name: item.name ?? '',
+      type: item.type,
+      ...(item.img ? { img: item.img } : {}),
+      folderId: item.folder?.id ?? null,
+      folderName: item.folder?.name ?? null,
+      system,
+      fullData,
+    };
   }
 
   /**
@@ -7126,6 +7445,187 @@ export class FoundryDataAccess {
   }
 
   /**
+   * Resolve player names or user IDs to user IDs, failing if any target is not exactly one
+   * user. Foundry keeps user names unique but compares them case-sensitively, so "Taco" and
+   * "TaCo" can coexist: an exact-case name wins, and ignoring case is only a fallback when
+   * it finds a single user.
+   */
+  private resolveWhisperTargets(targets: string[]): string[] {
+    const users: any[] = Array.from((game.users as any) || []);
+    const unmatched: string[] = [];
+    const ambiguous: string[] = [];
+    const ids: string[] = [];
+
+    for (const target of targets) {
+      const exact = users.find(u => u.id === target) ?? users.find(u => u.name === target);
+      if (exact) {
+        ids.push(exact.id);
+        continue;
+      }
+      const caseless = users.filter(u => u.name?.toLowerCase() === target.toLowerCase());
+      if (caseless.length === 1) {
+        ids.push(caseless[0].id);
+      } else if (caseless.length > 1) {
+        ambiguous.push(`"${target}" (${caseless.map(u => u.name).join(', ')})`);
+      } else {
+        unmatched.push(target);
+      }
+    }
+
+    const problems = [
+      ...(unmatched.length ? [`No matching players for whisperTo: ${unmatched.join(', ')}`] : []),
+      ...(ambiguous.length
+        ? [`Ambiguous whisperTo names, use the exact name or user ID: ${ambiguous.join('; ')}`]
+        : []),
+    ];
+    if (problems.length) {
+      throw new Error(problems.join('. '));
+    }
+    return ids;
+  }
+
+  /**
+   * Post an in-character line spoken by an actor or a specific token.
+   *
+   * Delivery is a floating chat bubble by default, a chat-log message when `chatLog` is
+   * set, and always a chat-log message when whispering, since a bubble is visible to
+   * everyone on the scene. With a language and Polyglot active, a chat-log message is
+   * tagged via Polyglot's own flag so it scrambles for viewers who lack that language:
+   * Polyglot only auto-assigns `flags.polyglot.language` when the flag isn't already
+   * present (see its preCreateChatMessage hook), so setting it at creation is respected.
+   * Bubbles carry the language in their broadcast options instead, which Polyglot's bubble
+   * class reads per viewer. Without Polyglot the line plays as written.
+   *
+   * Content is plain text: bubbles and chat-log messages render as HTML on every client,
+   * so any markup is escaped and shows as the characters sent.
+   */
+  async createChatMessage(data: {
+    actorIdentifier?: string;
+    tokenId?: string;
+    content: string;
+    language?: string;
+    chatLog?: boolean;
+    whisperTo?: string[];
+  }): Promise<any> {
+    this.validateFoundryState();
+
+    const permissionCheck = permissionManager.checkWritePermission('createChatMessage');
+    if (!permissionCheck.allowed) {
+      throw new Error(`${ERROR_MESSAGES.ACCESS_DENIED}: ${permissionCheck.reason}`);
+    }
+    permissionManager.auditPermissionCheck('createChatMessage', permissionCheck, data);
+
+    if (!data.content || typeof data.content !== 'string') {
+      throw new Error('content is required and must be a string');
+    }
+    const content = escapeHTML(data.content);
+
+    // A token id is exact, so it wins over a name lookup - this is what lets several
+    // tokens sharing one actor (guards, bandits) be addressed individually.
+    let token: any = null;
+    let actor: any = null;
+    if (data.tokenId) {
+      token = (canvas as any)?.scene?.tokens?.get(data.tokenId) ?? null;
+      if (!token) {
+        throw new Error(`Token not found on the current scene: ${data.tokenId}`);
+      }
+      actor = token.actor;
+    } else if (data.actorIdentifier) {
+      actor = this.findActorByIdentifier(data.actorIdentifier);
+      if (!actor) {
+        throw new Error(`Actor not found: ${data.actorIdentifier}`);
+      }
+      [token] = (actor.getActiveTokens(false, false) as any[]) || [];
+    } else {
+      throw new Error('Either actorIdentifier or tokenId is required');
+    }
+
+    // Two shapes of the same token are needed below and they are not interchangeable:
+    // bubbles.broadcast() wants the placeable, while ChatMessage.getSpeaker() must get the
+    // TokenDocument - it reads `token.parent?.id` for the speaker's scene, and a placeable
+    // has no `.parent`, so passing one yields scene: null and Foundry's sayBubble() then
+    // silently skips the bubble because `speaker.scene === canvas.scene.id` never matches.
+    const tokenDoc: any = token?.document ?? token;
+    const tokenObject: any = token?.object ?? token;
+
+    const polyglotActive = !!(game.modules as any)?.get?.('polyglot')?.active;
+    const applyPolyglot = !!(data.language && polyglotActive);
+
+    const whisperIds = data.whisperTo?.length ? this.resolveWhisperTargets(data.whisperTo) : [];
+    // A whisper has to be a real message; a bubble would show the line to the whole table.
+    const useChatLog = !!data.chatLog || whisperIds.length > 0;
+
+    if (!useChatLog) {
+      if (!token) {
+        throw new Error(
+          `"${actor?.name ?? data.actorIdentifier}" has no placed token on the current scene - ` +
+            `bubble delivery needs a token to anchor to. Place one, or pass chatLog: true.`
+        );
+      }
+
+      // broadcast() (not say()) so every client viewing the scene shows the bubble; say() is
+      // local to this browser. pan:false keeps the GM's camera from jumping to each speaker,
+      // and requireVisible:true means a player only sees bubbles over tokens they can see.
+      // Deliberately not awaited: the returned promise waits on the previous bubble's
+      // fade-out for this token, which never resolves in a throttled or hidden tab and would
+      // hang the call. A failure here is logged rather than thrown.
+      Promise.resolve(
+        (canvas as any).hud.bubbles.broadcast(tokenObject, content, {
+          pan: false,
+          requireVisible: true,
+          // Polyglot replaces CONFIG.Canvas.chatBubblesClass and reads options.language
+          // directly, and broadcast() forwards options to every client over the socket,
+          // so each viewer scrambles by their own known languages with no ChatMessage
+          // involved. Without Polyglot this option is simply ignored.
+          ...(applyPolyglot ? { language: data.language } : {}),
+        })
+      ).catch((err: unknown) =>
+        console.warn(`[${MODULE_ID}] Chat bubble failed for ${actor?.name}:`, err)
+      );
+
+      return {
+        success: true,
+        id: null,
+        speakerName: tokenDoc?.name || actor?.name,
+        polyglotApplied: applyPolyglot,
+        delivery: 'bubble',
+      };
+    }
+
+    const messageData: Record<string, any> = {
+      content,
+      speaker: tokenDoc
+        ? ChatMessage.getSpeaker({ token: tokenDoc, actor })
+        : ChatMessage.getSpeaker({ actor }),
+      style: (CONST as any).CHAT_MESSAGE_STYLES?.IC ?? (CONST as any).CHAT_MESSAGE_TYPES?.IC,
+    };
+
+    if (applyPolyglot) {
+      messageData.flags = { polyglot: { language: data.language } };
+    }
+    if (whisperIds.length > 0) {
+      messageData.whisper = whisperIds;
+    }
+
+    // Created the way the chat box creates a line typed as a token: core draws a bubble only
+    // for the in-character mode, timed by its own word count, and Polyglot scrambles it from
+    // the message's language flag. A whisper stays out of that mode, so it gets no bubble.
+    const chatMessage = await ChatMessage.create(
+      messageData,
+      (whisperIds.length > 0 ? {} : { messageMode: 'ic' }) as any
+    );
+
+    return {
+      success: true,
+      id: chatMessage?.id,
+      speakerName: messageData.speaker?.alias || actor?.name,
+      polyglotApplied: applyPolyglot,
+      delivery: whisperIds.length > 0 ? 'whisper' : 'chatLog',
+      ...(whisperIds.length > 0 ? { whisperedTo: whisperIds.length } : {}),
+    };
+  }
+
+  /**
    * Get friendly NPCs from current scene
    */
   async getFriendlyNPCs(): Promise<Array<{ id: string; name: string }>> {
@@ -8235,7 +8735,7 @@ export class FoundryDataAccess {
       }
 
       // Get the condition configuration for the game system
-      const conditions = (CONFIG as any).statusEffects || [];
+      const conditions = this.getStatusEffectList();
       const condition = conditions.find(
         (c: any) =>
           c.id === data.conditionId || c.name?.toLowerCase() === data.conditionId.toLowerCase()
@@ -8245,7 +8745,26 @@ export class FoundryDataAccess {
         throw new Error(`Condition not found: ${data.conditionId}`);
       }
 
-      if (data.active) {
+      const systemId = (game.system as any)?.id;
+
+      // PF2e opens a damage editor dialog for this one instead of applying anything.
+      if (systemId === 'pf2e' && condition.id === 'persistent-damage') {
+        throw new Error(
+          'Persistent damage needs a damage type and formula, so apply it from the sheet in Foundry'
+        );
+      }
+
+      // DSA5 keeps its original handling below: its conditions carry their own effect data,
+      // and it isn't installed where this change was checked.
+      if (systemId !== 'dsa5' && condition.id && typeof actor.toggleStatusEffect === 'function') {
+        // Foundry's own API, which systems override: PF2e routes its condition slugs to its
+        // Item-based conditions, dnd5e handles exclusive groups, and core removes only the
+        // status's own effect (or effects carrying that status alone). Hand-building an
+        // ActiveEffect did nothing on PF2e, and matching any effect whose statuses merely
+        // contained the id deleted compound effects, such as Paralyzed when removing
+        // Incapacitated on dnd5e.
+        await actor.toggleStatusEffect(condition.id, { active: data.active });
+      } else if (data.active) {
         // Add the condition - handle DSA5 and other systems
         const effectData: any = {
           name: condition.name || condition.label || condition.id,
@@ -8325,13 +8844,24 @@ export class FoundryDataAccess {
   }
 
   /**
+   * CONFIG.statusEffects as a list. Core keeps it as an array (a Proxy that also allows
+   * lookup by id), but PF2e replaces it with a plain object keyed by condition slug, so
+   * array methods on it threw in PF2e worlds.
+   */
+  private getStatusEffectList(): any[] {
+    const effects = (CONFIG as any).statusEffects;
+    if (!effects) return [];
+    return Array.isArray(effects) ? [...effects] : Object.values(effects);
+  }
+
+  /**
    * Get all available conditions for the current game system
    */
   async getAvailableConditions(): Promise<any> {
     this.validateFoundryState();
 
     try {
-      const conditions = (CONFIG as any).statusEffects || [];
+      const conditions = this.getStatusEffectList();
 
       return {
         success: true,

@@ -500,16 +500,17 @@ jobs:
           4. Start creating AI-powered campaigns!
 
           ### New in this release
-          - Scene music and playlist tools: bind playlists and tracks to scenes, plus playlist CRUD and playback control
-          - ActiveEffect management: create, update and delete effects on actors or their items
-          - DSA5 system support, plus a new `replace-journal-page` tool
-          - `manage-actors` can now place existing world actors onto the current scene
-          - Fixes: `use-item` targeting on Foundry V13/V14, Windows installer upgrade safety (no longer risks an existing ComfyUI install), large responses timing out over WebRTC, and several D&D 5e feature-creation defects
+          - Security fix: bridge queries are now only accepted from GM users. Updating is recommended.
+          - `manage-world-items` can read a world item in full: description, system data and rules
+          - `get-character` can read an unlinked token's own stats and effects by token ID or UUID
+          - PF2e: languages in `get-character`, and rule elements and effect changes now include their `key`
+          - dnd5e: Activity save configuration and Advancement data are no longer dropped from detailed item reads
+          - Clearer Claude Desktop config instructions for manual installs
 
           See the changelog for the full list.
 
           ### Features
-          - 48 MCP tools for comprehensive Foundry VTT integration
+          - 50 MCP tools for comprehensive Foundry VTT integration
           - Multi-system support: D&D 5e, Pathfinder 2e, DSA5, Cosmere RPG, WFRP4e, and Mongoose Traveller 2e
           - Generic actor CRUD (create/update/delete actors and embedded items) across all systems
           - D&D 5e NPC creation suite: stat blocks, attacks, saves, auras, and spellcasting
